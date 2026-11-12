@@ -76,7 +76,7 @@ export function TradesDashboard({ trades }: { trades: TradeRow[] }) {
                   <CartesianGrid strokeDasharray="3 3" stroke="currentColor" strokeOpacity={0.1} />
                   <XAxis dataKey="date" tick={{ fontSize: 11 }} />
                   <YAxis tick={{ fontSize: 11 }} width={56} />
-                  <Tooltip formatter={(v: number) => money(v)} />
+                  <Tooltip formatter={(v: any) => money(v)} />
                   <Area dataKey="equity" stroke="#34d399" fill="url(#eq)" strokeWidth={2} />
                 </AreaChart>
               </ResponsiveContainer>
