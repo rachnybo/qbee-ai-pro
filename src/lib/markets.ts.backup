@@ -1,0 +1,55 @@
+// Maps the pair names you type to data sources and TradingView symbols.
+// Anything not listed here is treated as a Binance crypto pair (e.g. SOLUSDT).
+
+const CANON: Record<string, string> = {
+  GOLD: "XAUUSD",
+  SILVER: "XAGUSD",
+  US100: "NAS100",
+  NDX: "NAS100",
+  DJI: "US30",
+  SPX: "SPX500",
+  US500: "SPX500",
+  WTI: "USOIL",
+  OIL: "USOIL",
+};
+
+// Yahoo Finance symbols, tried in order (spot first, futures as fallback)
+const YAHOO: Record<string, string[]> = {
+  XAUUSD: ["XAUUSD=X", "GC=F"],
+  XAGUSD: ["XAGUSD=X", "SI=F"],
+  NAS100: ["NQ=F"],
+  US30: ["YM=F"],
+  SPX500: ["ES=F"],
+  DXY: ["DX-Y.NYB"],
+  USOIL: ["CL=F"],
+};
+
+const TV: Record<string, string> = {
+  XAUUSD: "OANDA:XAUUSD",
+  XAGUSD: "OANDA:XAGUSD",
+  NAS100: "OANDA:NAS100USD",
+  US30: "OANDA:US30USD",
+  SPX500: "OANDA:SPX500USD",
+  DXY: "TVC:DXY",
+  USOIL: "TVC:USOIL",
+};
+
+const CURRENCIES = new Set(["USD", "EUR", "GBP", "JPY", "AUD", "NZD", "CAD", "CHF", "XAU", "XAG", "SGD"]);
+
+export const canonical = (s: string) => CANON[s] ?? s;
+
+export function yahooCandidates(symbol: string): string[] | null {
+  const s = canonical(symbol.toUpperCase());
+  if (YAHOO[s]) return YAHOO[s];
+  if (/^[A-Z]{6}$/.test(s) && CURRENCIES.has(s.slice(0, 3)) && CURRENCIES.has(s.slice(3))) return [`${s}=X`];
+  return null;
+}
+
+export const isTradFi = (symbol: string) => yahooCandidates(symbol) !== null;
+
+export function tvSymbol(symbol: string) {
+  const s = canonical(symbol.toUpperCase());
+  if (TV[s]) return TV[s];
+  if (isTradFi(s)) return `OANDA:${s}`;
+  return `BINANCE:${s}`;
+}

@@ -1,0 +1,215 @@
+===== SCAN ROUTE =====
+import { NextRequest, NextResponse } from "next/server";
+import { analyze, type Candle, type Signal } from "@/lib/scanner";
+import { canonical, yahooCandidates } from "@/lib/markets";
+
+const BINANCE = "https://data-api.binance.vision/api/v3"; // public crypto data, no key
+const YAHOO = "https://query1.finance.yahoo.com/v8/finance/chart"; // Gold, Forex, Indices
+const UA =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
+
+const DEFAULT_SYMBOLS = [
+  "XAUUSD", "EURUSD", "GBPUSD", "USDJPY", "NAS100",
+  "US30", "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT",
+];
+const VALID = /^[A-Z0-9]{3,20}$/;
+const TFS = ["5m", "15m", "1h", "4h"];
+const TF_MS: Record<string, number> = { "5m": 300_000, "15m": 900_000, "1h": 3_600_000, "4h": 14_400_000 };
+const YAHOO_PLAN: Record<string, { iv: string; range: string; agg: number }> = {
+  "5m": { iv: "5m", range: "5d", agg: 1 },
+  "15m": { iv: "15m", range: "5d", agg: 1 },
+  "1h": { iv: "60m", range: "1mo", agg: 1 },
+  "4h": { iv: "60m", range: "3mo", agg: 4 },
+};
+
+type Loaded = { candles: Candle[]; note?: string };
+
+async function binanceKlines(symbol: string, tf: string): Promise<Loaded> {
+  const res = await fetch(`${BINANCE}/klines?symbol=${symbol}&interval=${tf}&limit=300`, {
+    cache: "no-store",
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!res.ok) throw new Error(`${symbol} ${res.status}`);
+  const rows = (await res.json()) as (string | number)[][];
+  return {
+    candles: rows.map((r) => ({
+      t: Number(r[0]),
+      o: Number(r[1]),
+      h: Number(r[2]),
+      l: Number(r[3]),
+      c: Number(r[4]),
+      v: Number(r[5]),
+    })),
+  };
+}
+
+function aggregate(c: Candle[], ms: number): Candle[] {
+  const out: Candle[] = [];
+  for (const x of c) {
+    const bucket = Math.floor(x.t / ms) * ms;
+    const last = out[out.length - 1];
+    if (last && last.t === bucket) {
+      last.h = Math.max(last.h, x.h);
+      last.l = Math.min(last.l, x.l);
+      last.c = x.c;
+      last.v += x.v;
+    } else {
+      out.push({ t: bucket, o: x.o, h: x.h, l: x.l, c: x.c, v: x.v });
+    }
+  }
+  return out;
+}
+
+async function yahooKlines(symbol: string, candidates: string[], tf: string): Promise<Loaded> {
+  const plan = YAHOO_PLAN[tf];
+  let lastErr: unknown = new Error(`${symbol} no data`);
+  for (let k = 0; k < candidates.length; k++) {
+    const ysym = candidates[k];
+    try {
+      const url = `${YAHOO}/${encodeURIComponent(ysym)}?interval=${plan.iv}&range=${plan.range}&includePrePost=false`;
+      const res = await fetch(url, {
+        headers: { "User-Agent": UA, Accept: "application/json" },
+        cache: "no-store",
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!res.ok) throw new Error(`${ysym} ${res.status}`);
+      const j = await res.json();
+      const r = j?.chart?.result?.[0];
+      const ts: number[] | undefined = r?.timestamp;
+      const q = r?.indicators?.quote?.[0];
+      if (!ts || !q) throw new Error(`${ysym} no data`);
+
+      let candles: Candle[] = [];
+      for (let i = 0; i < ts.length; i++) {
+        const o = q.open?.[i];
+        const h = q.high?.[i];
+        const l = q.low?.[i];
+        const c = q.close?.[i];
+        if (o == null || h == null || l == null || c == null) continue;
+        candles.push({ t: ts[i] * 1000, o, h, l, c, v: q.volume?.[i] ?? 0 });
+      }
+      if (plan.agg > 1) candles = aggregate(candles, plan.agg * 3_600_000);
+      if (candles.length < 80) throw new Error(`${ysym} too few candles`);
+
+      const note = k > 0 ? `${symbol} uses ${ysym} (futures price, can differ from spot by a few points)` : undefined;
+      return { candles: candles.slice(-300), note };
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr;
+}
+
+async function load(symbol: string, tf: string): Promise<Loaded> {
+  const yahoo = yahooCandidates(symbol);
+  return yahoo ? yahooKlines(symbol, yahoo, tf) : binanceKlines(symbol, tf);
+}
+
+export async function GET(req: NextRequest) {
+  const tf = req.nextUrl.searchParams.get("tf") ?? "15m";
+  if (!TFS.includes(tf)) return NextResponse.json({ error: "Invalid timeframe" }, { status: 400 });
+
+  const raw = req.nextUrl.searchParams.get("symbols");
+  const symbols = raw
+    ? Array.from(
+        new Set(
+          raw
+            .split(",")
+            .map((x) => canonical(x.trim().toUpperCase()))
+            .filter((x) => VALID.test(x))
+        )
+      ).slice(0, 30)
+    : DEFAULT_SYMBOLS;
+  if (symbols.length === 0) return NextResponse.json({ error: "No valid symbols" }, { status: 400 });
+
+  const results = await Promise.allSettled(symbols.map(async (symbol) => ({ symbol, ...(await load(symbol, tf)) })));
+
+  const signals: Signal[] = [];
+  const failed: string[] = [];
+  const closed: string[] = [];
+  const notes: string[] = [];
+  const now = Date.now();
+
+  results.forEach((r, i) => {
+    if (r.status !== "fulfilled") {
+      failed.push(symbols[i]);
+      return;
+    }
+    const { symbol, candles, note } = r.value;
+    if (note) notes.push(note);
+    const lastT = candles[candles.length - 1].t;
+    if (now - lastT > 3 * TF_MS[tf]) {
+      closed.push(symbol); // market closed (weekend / holiday): data is stale
+      return;
+    }
+    signals.push(...analyze(symbol, tf, candles));
+  });
+  signals.sort((a, b) => b.score - a.score);
+
+  return NextResponse.json({
+    tf,
+    scanned: symbols.length - failed.length,
+    failed,
+    closed,
+    notes,
+    signals,
+    at: Date.now(),
+  });
+}
+===== MARKETS =====
+// Maps the pair names you type to data sources and TradingView symbols.
+// Anything not listed here is treated as a Binance crypto pair (e.g. SOLUSDT).
+
+const CANON: Record<string, string> = {
+  GOLD: "XAUUSD",
+  SILVER: "XAGUSD",
+  US100: "NAS100",
+  NDX: "NAS100",
+  DJI: "US30",
+  SPX: "SPX500",
+  US500: "SPX500",
+  WTI: "USOIL",
+  OIL: "USOIL",
+};
+
+// Yahoo Finance symbols, tried in order (spot first, futures as fallback)
+const YAHOO: Record<string, string[]> = {
+  XAUUSD: ["XAUUSD=X", "GC=F"],
+  XAGUSD: ["XAGUSD=X", "SI=F"],
+  NAS100: ["NQ=F"],
+  US30: ["YM=F"],
+  SPX500: ["ES=F"],
+  DXY: ["DX-Y.NYB"],
+  USOIL: ["CL=F"],
+};
+
+const TV: Record<string, string> = {
+  XAUUSD: "OANDA:XAUUSD",
+  XAGUSD: "OANDA:XAGUSD",
+  NAS100: "OANDA:NAS100USD",
+  US30: "OANDA:US30USD",
+  SPX500: "OANDA:SPX500USD",
+  DXY: "TVC:DXY",
+  USOIL: "TVC:USOIL",
+};
+
+const CURRENCIES = new Set(["USD", "EUR", "GBP", "JPY", "AUD", "NZD", "CAD", "CHF", "XAU", "XAG", "SGD"]);
+
+export const canonical = (s: string) => CANON[s] ?? s;
+
+export function yahooCandidates(symbol: string): string[] | null {
+  const s = canonical(symbol.toUpperCase());
+  if (YAHOO[s]) return YAHOO[s];
+  if (/^[A-Z]{6}$/.test(s) && CURRENCIES.has(s.slice(0, 3)) && CURRENCIES.has(s.slice(3))) return [`${s}=X`];
+  return null;
+}
+
+export const isTradFi = (symbol: string) => yahooCandidates(symbol) !== null;
+
+export function tvSymbol(symbol: string) {
+  const s = canonical(symbol.toUpperCase());
+  if (TV[s]) return TV[s];
+  if (isTradFi(s)) return `OANDA:${s}`;
+  return `BINANCE:${s}`;
+}
+===== ENV NAMES =====

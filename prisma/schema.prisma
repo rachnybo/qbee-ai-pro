@@ -1,0 +1,170 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")   // pooled (Supabase pgbouncer)
+  directUrl = env("DIRECT_URL")     // direct, used by migrations
+}
+
+enum Direction {
+  BUY
+  SELL
+}
+enum TradeStatus {
+  OPEN
+  CLOSED
+}
+enum TradeSource {
+  MANUAL
+  WEBHOOK
+}
+enum TradingSession {
+  ASIA
+  LONDON
+  NEW_YORK
+}
+enum Setup {
+  FVG
+  ORDER_BLOCK
+  BREAKER_BLOCK
+  LIQUIDITY_SWEEP
+  MSS
+  SMT_DIVERGENCE
+}
+enum PsychTag {
+  DISCIPLINED
+  FOMO
+  PATIENT
+  REVENGE
+  HESITANT
+}
+enum SmtBias {
+  BULLISH
+  BEARISH
+}
+enum WebhookStatus {
+  RECEIVED
+  PROCESSED
+  REJECTED
+  FAILED
+}
+enum JournalPeriod {
+  DAILY
+  WEEKLY
+}
+
+model User {
+  id            String   @id @default(cuid())
+  authId        String   @unique            // Supabase/Firebase uid
+  email         String   @unique
+  name          String?
+  webhookSecret String   @unique @default(cuid()) // goes in the TradingView alert JSON
+  createdAt     DateTime @default(now())
+
+  trades         Trade[]
+  journals       Journal[]
+  webhookLogs    WebhookLog[]
+  telegramConfig TelegramConfig?
+}
+
+model Trade {
+  id             String         @id @default(cuid())
+  userId         String
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  pair           String                       // e.g. EURUSD, NQ1!
+  timeframe      String?
+  direction      Direction
+  status         TradeStatus    @default(OPEN)
+  source         TradeSource    @default(MANUAL)
+
+  entry          Decimal        @db.Decimal(18, 5)
+  exit           Decimal?       @db.Decimal(18, 5)
+  stopLoss       Decimal?       @db.Decimal(18, 5)
+  takeProfit     Decimal?       @db.Decimal(18, 5)
+  riskPercent    Float?
+  rr             Float?                       // planned R:R
+  rMultiple      Float?                       // realised R
+  pnl            Decimal?       @db.Decimal(14, 2)
+
+  session        TradingSession
+  setups         Setup[]
+  psychTags      PsychTag[]
+  notes          String?
+  screenshotUrls String[]                     // Supabase Storage URLs
+
+  smt            SmtDivergence?
+  webhookLog     WebhookLog?
+
+  openedAt       DateTime       @default(now())
+  closedAt       DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  @@index([userId, openedAt])
+  @@index([userId, pair])
+  @@index([userId, session])
+}
+
+model SmtDivergence {
+  id               String  @id @default(cuid())
+  tradeId          String  @unique
+  trade            Trade   @relation(fields: [tradeId], references: [id], onDelete: Cascade)
+  primarySymbol    String                    // EURUSD
+  correlatedSymbol String                    // DXY
+  bias             SmtBias
+  timeframe        String?
+  note             String?
+}
+
+model Journal {
+  id          String        @id @default(cuid())
+  userId      String
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  period      JournalPeriod
+  periodStart DateTime
+  periodEnd   DateTime
+  notes       String?
+  aiReview    Json?                           // structured AI feedback
+  aiScore     Int?                            // 0–100 discipline score
+  createdAt   DateTime      @default(now())
+
+  @@unique([userId, period, periodStart])
+}
+
+model WebhookLog {
+  id           String        @id @default(cuid())
+  userId       String?
+  user         User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  status       WebhookStatus @default(RECEIVED)
+  dedupeKey    String?
+  symbol       String?
+  timeframe    String?
+  payload      Json?
+  rawBody      String?
+  error        String?
+  telegramSent Boolean       @default(false)
+  tradeId      String?       @unique
+  trade        Trade?        @relation(fields: [tradeId], references: [id], onDelete: SetNull)
+  ip           String?
+  receivedAt   DateTime      @default(now())
+
+  @@unique([userId, dedupeKey])
+  @@index([userId, receivedAt])
+}
+
+model TelegramConfig {
+  id              String   @id @default(cuid())
+  userId          String   @unique
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  botTokenEnc     String                    // AES-GCM encrypted, never store plaintext
+  chatId          String                    // channel (-100…) or chat id
+  threadId        Int?                      // optional forum topic
+  enabled         Boolean  @default(true)
+  forwardWebhooks Boolean  @default(true)
+  forwardAiSetups Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
