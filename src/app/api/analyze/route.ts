@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { NextResponse } from "next/server";
 
+import { gate } from "@/lib/gate";
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const MODEL = process.env.ANALYZE_MODEL || "claude-opus-5-5";
 const FALLBACK = "claude-sonnet-5-5";
@@ -96,14 +97,14 @@ function summarize(cs: C[], name: string, rawN: number) {
   return { atr: a, text };
 }
 
-const BIN: Record<string, string> = { "XAU/USD": "PAXGUSDT", "BTC/USD": "BTCUSDT", "ETH/USD": "ETHUSDT" };
+const BIN: Record<string, string> = { "XAU/USD": "XAUUSDT", "BTC/USD": "BTCUSDT", "ETH/USD": "ETHUSDT" };
 const BIN_TF: Record<string, string> = { "5min": "5m", "15min": "15m", "1h": "1h", "4h": "4h", "1day": "1d", "1week": "1w" };
 
 async function orderFlow(symbol: string, tf: string): Promise<string | null> {
   const bs = BIN[symbol], bi = BIN_TF[tf];
   if (!bs || !bi) return null;
   try {
-    const res = await fetch(`https://data-api.binance.vision/api/v3/klines?symbol=${bs}&interval=${bi}&limit=60`, {
+    const res = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=${bs}&interval=${bi}&limit=60`, {
       cache: "no-store",
       signal: AbortSignal.timeout(7000),
     });
@@ -119,7 +120,7 @@ async function orderFlow(symbol: string, tf: string): Promise<string | null> {
     const buyPct = sumV > 0 ? Math.round(((sumV + sumD) / 2 / sumV) * 100) : 50;
     const lines = rows.slice(-30).map((r) => `${r.t},${r.c},${r.vol.toFixed(2)},${r.delta.toFixed(2)}`).join("\n");
     return (
-      `Source: Binance ${bs} spot (for gold this is PAXG, a gold-backed token, so volume is thinner than OTC gold; treat it as a rough read of pressure), ${bi} candles. Real taker data: delta = taker buy volume minus taker sell volume. ` +
+      `Source: Binance ${bs} perpetual, ${bi} candles. Real taker data: delta = taker buy volume minus taker sell volume. ` +
       `Prices can differ slightly from spot ${symbol}, so use it for buying/selling PRESSURE only, not for price levels.\n` +
       `Last 20 candles: net delta ${sumD.toFixed(2)}, buy share ${buyPct}% (${sumD >= 0 ? "buyers dominate" : "sellers dominate"}).\n` +
       `Last 30 candles (time,close,volume,delta):\n${lines}`
@@ -219,7 +220,11 @@ function validate(a: any, price: number, atr: number | null) {
   return a;
 }
 
+export const maxDuration = 120;
+
 export async function POST(req: Request) {
+  const g = gate(req);
+  if (g) return g;
   const t0 = Date.now();
   try {
     const { symbol = "XAU/USD", mode = "scalp" } = await req.json();

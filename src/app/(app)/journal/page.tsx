@@ -24,8 +24,8 @@ const nowLocal = () => {
   d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
   return d.toISOString().slice(0, 16);
 };
-const emptyForm = (): Form => ({
-  date: nowLocal(), symbol: "XAU/USD", customSymbol: "", dir: "BUY",
+const emptyForm = (date = ""): Form => ({
+  date, symbol: "XAU/USD", customSymbol: "", dir: "BUY",
   entry: "", sl: "", tp: "", exit: "", lots: "", pnl: "",
   setup: SETUPS[0], quality: QUALITY[0], notes: "",
 });
@@ -84,6 +84,7 @@ export default function JournalPage() {
       if (raw) setTrades(JSON.parse(raw));
     } catch {}
     setLoaded(true);
+    setF((p) => (p.date ? p : { ...p, date: nowLocal() }));
   }, []);
   useEffect(() => {
     if (!loaded) return;
@@ -103,7 +104,7 @@ export default function JournalPage() {
       setup: f.setup, quality: f.quality, notes: f.notes.trim(),
     };
     setTrades((p) => (editing ? p.map((x) => (x.id === editing ? t : x)) : [t, ...p]));
-    setF({ ...emptyForm(), symbol: f.symbol, customSymbol: f.customSymbol, setup: f.setup });
+    setF({ ...emptyForm(nowLocal()), symbol: f.symbol, customSymbol: f.customSymbol, setup: f.setup });
     setEditing(null);
     setMsg(editing ? "បានកែប្រែ ✅" : "បានរក្សាទុក ✅");
     setTimeout(() => setMsg(""), 2500);
@@ -317,7 +318,7 @@ export default function JournalPage() {
             <div className="mb-3 flex items-center justify-between">
               <div className="text-sm font-semibold">{editing ? "✎ កែ Trade" : "➕ Trade ថ្មី"}</div>
               {editing && (
-                <button className="text-xs text-muted-foreground hover:text-foreground" onClick={() => { setEditing(null); setF(emptyForm()); }}>បោះបង់</button>
+                <button className="text-xs text-muted-foreground hover:text-foreground" onClick={() => { setEditing(null); setF(emptyForm(nowLocal())); }}>បោះបង់</button>
               )}
             </div>
             <div className="space-y-3">

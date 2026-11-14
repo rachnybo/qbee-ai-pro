@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { NextResponse } from "next/server";
 
+import { gate } from "@/lib/gate";
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const MODEL = process.env.ANALYZE_MODEL || "claude-opus-5-5";
 const FALLBACK = "claude-sonnet-5-5";
@@ -64,7 +65,11 @@ function validate(a: any) {
   return a;
 }
 
+export const maxDuration = 120;
+
 export async function POST(req: Request) {
+  const g = gate(req);
+  if (g) return g;
   const t0 = Date.now();
   try {
     const { image, mode = "scalp", symbol = "" } = await req.json();
