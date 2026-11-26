@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import { Activity, BookOpen, Crosshair, ClipboardList, Newspaper, Radar, Sparkles, Target, TrendingUp } from "lucide-react";
+import { Activity, BookOpen, Crosshair, Users, BellRing, ClipboardList, Newspaper, Radar, Sparkles, Target, TrendingUp } from "lucide-react";
 import { TVWidget, TV } from "@/components/tv-widget";
 import { cn } from "@/lib/utils";
 
@@ -16,6 +16,8 @@ const NAV = [
   { href: "/indicator", label: "Indicator", icon: Target },
   { href: "/news", label: "News", icon: Newspaper },
   { href: "/journal", label: "Trade Journal", icon: ClipboardList },
+  { href: "/council", label: "AI Council", icon: Users },
+  { href: "/newsdesk", label: "News Signal", icon: BellRing },
   { href: "/dashboard", label: "Journal", icon: BookOpen },
 ];
 
